@@ -139,3 +139,272 @@ uv run app.py
     | 의존성 파일    | requirements.txt | pyproject.toml + uv.lock |
     | Python 버전 | 별도 관리            | uv에서 관리                  |
     | 속도        | 보통               | 매우 빠름                    |
+
+## 3. GCP 서비스 계정 키 
+    환경변수 'GCP_KEY_PATH'에 키 파일 경로 설정
+
+## 4. GitHub token
+    repo metadata 수집 시 github api 사용
+    gh가 CLI login되어 있으면 자동으로 토큰 가져올 수 있음
+
+**GitHub API**
+> API: Appilication Programming Interface
+> REST API: Representational State Transfer
+
+    [URL] = 무엇(resource)
+        
+        ex) 
+        /users/1
+        -> 의미: “유저 1번”
+
+    [HTTP Method] = 무엇을 할지(action)
+
+| Method | 의미    | 행동         |
+| ------ | ----- | ---------- |
+| GET    | 조회    | 유저 정보 가져오기 |
+| POST   | 생성    | 유저 생성      |
+| PUT    | 수정    | 유저 전체 수정   |
+| PATCH  | 부분 수정 | 일부만 수정     |
+| DELETE | 삭제    | 유저 삭제      |
+
+
+옛날 방식:
+
+    /getUser
+    /deleteUser
+    /updateUser
+
+    -> URL에 동작까지 넣음 (비REST)
+
+REST 방식:
+
+    /users/1 + GET
+    /users/1 + DELETE
+
+    -> 역할 분리:
+
+    URL → “대상”
+    Method → “행동”
+
+**HTTP method = CRUD 행동을 표현하는 표준**
+
+    GET → Read
+    POST → Create
+    PUT/PATCH → Update
+    DELETE → Delete
+
+*“HTTP method로 행동 정의” = 같은 resource에 대해 어떤 작업을 할지 method로 구분한다는 뜻*
+
+**GitHub REST API Structure**
+
+    https://api.github.com/
+
+    뒤에 resource를 붙여서 사용
+
+    주요 endpoint
+    /repos/{owner}/{repo}
+    /issues
+    /pulls
+    /commits
+    /contributors
+
+    [예시]
+
+        GET /repos/pandas-dev/pandas
+
+        -> repository 기본 정보
+
+        GET /repos/pandas-dev/pandas/issues
+
+        -> issue 데이터
+
+    
+**Authentication**
+GitHub API는 인증 없이도 사용 가능
+- 인증 x: rate limit 낮음 (~60 요청/hour)
+- 인증 o: rate limit 증가
+(~5000 요청/hour)
+
+**GitHub Token**
+개인 인증 키
+```bash
+Authorization: Bearer <TOKEN>
+```
+**gh CLI**
+```bash
+gh auth login
+```
+로그인하면:
+- 내부적으로 토큰 저장됨
+- API 호출 시 자동 사용 가능
+
+**Python에서 API 호출 예시**
+```python
+import requests
+url = "https://api.github.com/repos/pandas-dev/pandas"
+headers = {
+    "Authorization":"Bearer YOUR_TOKEN",
+    # Bearer token: 소지자에게 권한을 부여한다
+    "Accept": "application/vnd.github+json"
+}
+response = requests.get(url, headers=headers)
+data=response.json()
+pritn(data["stargazrs_count"])
+```
+**API 호출 → 데이터 수집 전체 흐름**
+1. GitHub API endpoint 선택
+2. HTTP 요청 (GET)
+3. JSON 응답 수신
+4. 필요한 데이터 추출
+5. 전처리 및 저장
+
+**REST API vs 기타 API**
+- REST API → 가장 기본적인 데이터 조회 방식
+- GraphQL → 필요한 데이터만 정밀 조회
+- Webhook → 이벤트 기반 자동 처리
+
+**Why REST API?**
+
+REST API는 URL 기반으로 자원이 명확하게 표현되어 있어\
+repository, issue, commit 등의 데이터를 직관적으로 조회할 수 있고,\
+현재 프로젝트에서는 단순 메타데이터 수집이 목적이었기 때문에 REST API로 충분
+
+또한 GraphQL 대비 학습 비용이 낮고, endpoint 단위로 디버깅이 용이하다는 점에서
+초기 개발 단계에서는 REST API가 더 적합하다고 판단했습니다.
+
+추후 데이터 요청 구조가 복잡해질 경우 GraphQL 도입도 고려할 수 있음
+
+> **REST** = 여러 endpoint에서 데이터 가져와서 조합\
+> **GraphQL** = 한 번에 원하는 데이터만 정확히 가져옴
+
+```
+[REST API]
+
+자원(Resource) 중심
+
+    /repos/{owner}/{repo}
+    /issues
+    /commits
+    URL = 데이터 위치
+    HTTP method = 행동
+```
+```
+[GraphQL]
+
+Query 중심
+
+    {
+    repository(owner: "pandas-dev", name: "pandas") {
+        stargazerCount
+        issues(first: 5) {
+        nodes {
+            title
+                }
+            }
+        }
+    }
+```
+
+### 정밀 비교
+**(1) 요청 횟수**
+```
+    [REST]
+    (/repos/{owner}/{repo}
+    /issues
+    /commits)
+
+    repo 정보 → 1번
+    issues → 1번
+    commits → 1번
+
+    => 총 3번 요청
+
+    URL = 데이터 위치
+    HTTP method = 행동
+
+----------------------------------------------------------------
+
+    [GraphQL]
+    {
+        repository(owner: "pandas-dev", name: "pandas") {
+            stargazerCount
+            issues(first: 5) {
+            nodes {
+                title
+            }
+            }
+        }
+    }
+    어떤 데이터가 필요한지 직접 정의
+    => 한 번에 다 가져옴
+
+    (네트워크 효율)
+```
+**(2) 데이터 낭비**
+```
+[REST]
+{
+  "id": 1,
+  "name": "repo",
+  "owner": "...",
+  "url": "...",
+  "created_at": "...",
+  ...
+}
+=> 필요 없는 데이터까지 다 옴
+
+[GraphQL]
+{
+  repository {
+    name
+  }
+}
+=> 필요한 것만 가져옴
+```
+**(3) Underfetching 문제**
+```
+[REST]
+필요한 데이터가 여러 endpoint에 흩어짐
+
+[GraphQL]
+한 번에 해결
+```
+**(4) 학습 난이도**\
+    ```REST is better```
+
+**(5) Debugging**
+```
+[REST]
+endpoint 단위로 문제 확인 가능
+
+[GraphQL]
+한 쿼리에 다 들어 있어서 문제 위치 파악 어려움
+```
+
+**(6) cashing**\
+캐싱(Cache) = 이미 계산/요청한 결과를 저장해두고, 다시 쓰는 것
+
+[REST]
+> URL 기반 → 캐싱 쉬움
+
+[GraphQL]
+> 쿼리 기반 → 캐싱 어려움
+
+**(7) 유연성**
+
+[REST]
+> 정해진 구조
+
+[GraphQL]
+> 원하는 구조로 요청 가능
+
+
+| 항목     | REST API    | GraphQL  |
+| ------ | ----------- | -------- |
+| 구조     | resource 중심 | query 중심 |
+| 요청 횟수  | 많음          | 적음       |
+| 데이터 낭비 | 있음          | 없음       |
+| 구현 난이도 | 쉬움          | 어려움      |
+| 디버깅    | 쉬움          | 어려움      |
+| 캐싱     | 쉬움          | 어려움      |
+| 유연성    | 낮음          | 높음       |
